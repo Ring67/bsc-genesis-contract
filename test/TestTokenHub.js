@@ -1080,6 +1080,8 @@ contract('TokenHub', (accounts) => {
             let timestamp = Math.floor(Date.now() / 1000); // counted by second
             let expireTime = timestamp + 300; // expire at five minutes later
             await tokenManager.mirror(xyzToken.address, expireTime, {from: player, value: miniRelayFee.add(mirrorFee)});
+            const tokenManagerBalance = await web3.eth.getBalance(tokenManager.address);
+            assert.equal(web3.utils.toBN(tokenManagerBalance).eq(mirrorFee), true, "wrong tokenManager balance");
             await tokenManager.mirror(xyzToken.address, expireTime, {from: player, value: miniRelayFee.add(mirrorFee)});
             assert.fail();
         } catch (error) {
@@ -1087,6 +1089,8 @@ contract('TokenHub', (accounts) => {
             const mirrorChannelSeq = await crossChain.channelReceiveSequenceMap(MIRROR_CHANNELID);
             const mirrorAckPackageBytes = buildMirrorAckPackage(player, xyzToken.address, 18, "", mirrorFee, 1);
             await crossChain.handlePackage(mirrorAckPackageBytes, proof, merkleHeight, mirrorChannelSeq, MIRROR_CHANNELID, {from: relayer});
+            const tokenManagerBalance = await web3.eth.getBalance(tokenManager.address);
+            assert.equal(web3.utils.toBN(tokenManagerBalance).eq(web3.utils.toBN(0)), true, "wrong tokenManager balance");
         }
 
     });
@@ -1126,10 +1130,15 @@ contract('TokenHub', (accounts) => {
         assert.equal(web3.utils.toBN(decodedMirrorSynPackage.mirrorFee).mul(web3.utils.toBN(1e10)).eq(mirrorFee), true, "Wrong mirrorFee in mirror sync package");
         assert.equal(web3.utils.hexToNumber(decodedMirrorSynPackage.bep20Decimals), xyzTokenDecimals, "Wrong decimals in mirror sync package");
         assert.equal(web3.utils.toBN(decodedMirrorSynPackage.bep20Supply).eq(xyzTokenTotalSupply), true, "Wrong total supply in mirror sync package");
+        let tokenManagerBalance = await web3.eth.getBalance(tokenManager.address);
+        assert.equal(web3.utils.toBN(tokenManagerBalance).eq(mirrorFee), true, "wrong tokenManager balance");
 
         const mirrorChannelSeq = await crossChain.channelReceiveSequenceMap(MIRROR_CHANNELID);
         const mirrorAckPackageBytes = buildMirrorAckPackage(player, xyzToken.address, 18, "XYZ-123", mirrorFee, 0);
         await crossChain.handlePackage(mirrorAckPackageBytes, proof, merkleHeight, mirrorChannelSeq, MIRROR_CHANNELID, {from: relayer});
+
+        tokenManagerBalance = await web3.eth.getBalance(tokenManager.address);
+        assert.equal(web3.utils.toBN(tokenManagerBalance).eq(web3.utils.toBN(0)), true, "wrong tokenManager balance");
 
         const bep2Symbol = await tokenHub.getBoundBep2Symbol.call(xyzToken.address);
         assert.equal(bep2Symbol, "XYZ-123", "wrong symbol");
@@ -1147,5 +1156,7 @@ contract('TokenHub', (accounts) => {
         assert.equal(decodedSyncSynPackage.bep20Addr.toLowerCase(), XYZToken.address.toLowerCase(), "Wrong bep20 address in sync syn package");
         assert.equal(web3.utils.toBN(decodedSyncSynPackage.bep20Supply).eq(xyzTokenNewTotalSupply), true, "Wrong total supply in sync syn package");
         assert.equal(web3.utils.toBN(decodedSyncSynPackage.syncFee).mul(web3.utils.toBN(1e10)).eq(syncFee), true, "Wrong mirrorFee in sync syn package");
+        tokenManagerBalance = await web3.eth.getBalance(tokenManager.address);
+        assert.equal(web3.utils.toBN(tokenManagerBalance).eq(syncFee), true, "wrong tokenManager balance");
     });
 });

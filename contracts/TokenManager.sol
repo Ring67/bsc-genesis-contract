@@ -346,7 +346,7 @@ contract TokenManager is System, IApplication, IParamSubscriber {
     for (uint8 i = 0; i < symbolBytes.length; i++) {
       require((symbolBytes[i]>='a' && symbolBytes[i]<='a') || (symbolBytes[i]>='A' && symbolBytes[i]<='Z'), "bep20 symbol must not contain non-alphabet");
     }
-
+    address(uint160(TOKEN_HUB_ADDR)).transfer(msg.value.sub(mirrorFee));
     mirrorPendingRecord[bep20Addr] = true;
     bytes32 bytes32Name;
     assembly {
@@ -456,6 +456,7 @@ contract TokenManager is System, IApplication, IParamSubscriber {
     uint8 decimals = IBEP20(bep20Addr).decimals();
     require(convertToBep2Amount(totalSupply, decimals) <= MAX_BEP2_TOTAL_SUPPLY, "bep20 total supply is to large");
 
+    address(uint160(TOKEN_HUB_ADDR)).transfer(msg.value.sub(syncFee));
     SyncSynPackage memory syncSynPackage = SyncSynPackage({
       syncSender:    msg.sender,
       bep20Addr:     bep20Addr,
