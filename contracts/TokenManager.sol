@@ -112,6 +112,7 @@ contract TokenManager is System, IApplication, IParamSubscriber {
   mapping(bytes32 => BindSynPackage) public bindPackageRecord;
 
   mapping(address => bool) public mirrorPendingRecord;
+  mapping(address => bool) public boundByMirror;
   uint256 public mirrorFee;
   uint256 public syncFee;
 
@@ -201,6 +202,7 @@ contract TokenManager is System, IApplication, IParamSubscriber {
   }
 
   function approveBind(address contractAddr, string memory bep2Symbol) payable public returns (bool) {
+    require(!mirrorPendingRecord[contractAddr], "the bep20 token is in mirror pending status");
     bytes32 bep2TokenSymbol = bep2TokenSymbolConvert(bep2Symbol);
     BindSynPackage memory bindSynPkg = bindPackageRecord[bep2TokenSymbol];
     require(bindSynPkg.bep2TokenSymbol!=bytes32(0x00), "bind request doesn't exist");
@@ -232,7 +234,6 @@ contract TokenManager is System, IApplication, IParamSubscriber {
   }
 
   function rejectBind(address contractAddr, string memory bep2Symbol) payable public returns (bool) {
-    require(!mirrorPendingRecord[contractAddr], "the bep20 token is in mirror pending status");
     bytes32 bep2TokenSymbol = bep2TokenSymbolConvert(bep2Symbol);
     BindSynPackage memory bindSynPkg = bindPackageRecord[bep2TokenSymbol];
     require(bindSynPkg.bep2TokenSymbol!=bytes32(0x00), "bind request doesn't exist");
@@ -377,6 +378,7 @@ contract TokenManager is System, IApplication, IParamSubscriber {
     if (mirrorAckPackage.errorCode == MIRROR_STATUS_SUCCESS ) {
       address(uint160(TOKEN_HUB_ADDR)).transfer(mirrorAckPackage.mirrorFee);
       ITokenHub(TOKEN_HUB_ADDR).bindToken(mirrorAckPackage.bep2Symbol, mirrorAckPackage.bep20Addr, mirrorAckPackage.bep20Decimals);
+      boundByMirror[mirrorAckPackage.bep20Addr] = true;
       emit mirrorSuccess(mirrorAckPackage.bep20Addr, mirrorAckPackage.bep2Symbol);
       return;
     } else if (mirrorAckPackage.errorCode == MIRROR_STATUS_TIMEOUT ) {
@@ -395,7 +397,7 @@ contract TokenManager is System, IApplication, IParamSubscriber {
     (MirrorSynPackage memory mirrorSynPackage, bool decodeSuccess) = decodeMirrorSynPackage(msgBytes);
     require(decodeSuccess, "unrecognized mirror syn package");
     mirrorPendingRecord[mirrorSynPackage.bep20Addr] = false;
-    mirrorSynPackage.mirrorSender.call{gas: MAX_GAS_FOR_TRANSFER_BNB, value: mirrorSynPackage.mirrorFee}("");
+    mirrorSynPackage.mirrorSender.call{gas: MAX_GAS_FOR_TRANSFER_BNB, value: mirrorSynPackage.mirrorFee*TEN_DECIMALS}("");
   }
 
   function encodeSyncSynPackage(SyncSynPackage memory syncSynPackage) internal pure returns (bytes memory) {
@@ -436,7 +438,7 @@ contract TokenManager is System, IApplication, IParamSubscriber {
     while (iter.hasNext()) {
       if (idx == 0)      syncAckPackage.syncSender   = iter.next().toAddress();
       else if (idx == 1) syncAckPackage.bep20Addr    = iter.next().toAddress();
-      else if (idx == 2) syncAckPackage.syncFee = uint8(iter.next().toUint());
+      else if (idx == 2) syncAckPackage.syncFee      = iter.next().toUint();
       else if (idx == 3) {
         syncAckPackage.errorCode  = uint8(iter.next().toUint());
         success = true;
@@ -449,12 +451,13 @@ contract TokenManager is System, IApplication, IParamSubscriber {
 
   function sync(address bep20Addr, uint64 expireTime) payable public returns (bool) {
     require(ITokenHub(TOKEN_HUB_ADDR).getBep2SymbolByContractAddr(bep20Addr) != bytes32(0x00), "the bep20 token is not bound");
+    require(boundByMirror[bep20Addr], "the bep20 token is not bound by mirror");
     uint256 miniRelayFee = ITokenHub(TOKEN_HUB_ADDR).getMiniRelayFee();
     require(msg.value%TEN_DECIMALS == 0 && msg.value>=syncFee.add(miniRelayFee), "msg.value must be N * 1e10 and greater than sum of miniRelayFee and syncFee");
     require(expireTime>=block.timestamp + 120 && expireTime <= block.timestamp + 86400, "expireTime must be two minutes later and one day earlier");
     uint256 totalSupply = IBEP20(bep20Addr).totalSupply();
     uint8 decimals = IBEP20(bep20Addr).decimals();
-    require(convertToBep2Amount(totalSupply, decimals) <= MAX_BEP2_TOTAL_SUPPLY, "bep20 total supply is to large");
+    require(convertToBep2Amount(totalSupply, decimals) <= MAX_BEP2_TOTAL_SUPPLY, "bep20 total supply is too large");
 
     address(uint160(TOKEN_HUB_ADDR)).transfer(msg.value.sub(syncFee));
     SyncSynPackage memory syncSynPackage = SyncSynPackage({
@@ -488,7 +491,7 @@ contract TokenManager is System, IApplication, IParamSubscriber {
   function handleSyncFailAckPackage(bytes memory msgBytes) internal {
     (SyncSynPackage memory syncSynPackage, bool decodeSuccess) = decodeSyncSynPackage(msgBytes);
     require(decodeSuccess, "unrecognized sync syn package");
-    syncSynPackage.syncSender.call{gas: MAX_GAS_FOR_TRANSFER_BNB, value: syncSynPackage.syncFee}("");
+    syncSynPackage.syncSender.call{gas: MAX_GAS_FOR_TRANSFER_BNB, value: syncSynPackage.syncFee*TEN_DECIMALS}("");
   }
 
   function updateParam(string calldata key, bytes calldata value) override external onlyGov{

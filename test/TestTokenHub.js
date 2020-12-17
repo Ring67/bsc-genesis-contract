@@ -72,6 +72,12 @@ function buildAckPackagePrefix() {
     ));
 }
 
+function buildFailAckPackagePrefix() {
+    return Buffer.from(web3.utils.hexToBytes(
+        "0x02" + toBytes32String(0)
+    ));
+}
+
 function buildBindPackage(bindType, bep2TokenSymbol, bep20Addr, totalSupply, peggyAmount, decimals) {
     let timestamp = Math.floor(Date.now() / 1000); // counted by second
     let initialExpireTimeStr = (timestamp + 3).toString(16); // expire at 5 second later
@@ -951,11 +957,19 @@ contract('TokenHub', (accounts) => {
         try {
             let timestamp = Math.floor(Date.now() / 1000); // counted by second
             let expireTime = timestamp + 300; // expire at five minutes later
-            const tx1 = await tokenManager.mirror(miniToken.address, expireTime, {from: player, value: miniRelayFee.add(mirrorFee)});
-            console.log(tx1);
+            await tokenManager.mirror(miniToken.address, expireTime, {from: player, value: miniRelayFee.add(mirrorFee)});
             assert.fail();
         } catch (error) {
             assert.ok(error.toString().includes("the bep20 token has already been bound"));
+        }
+
+        try {
+            let timestamp = Math.floor(Date.now() / 1000); // counted by second
+            let expireTime = timestamp + 100; // expire at five minutes later
+            await tokenManager.mirror(xyzToken.address, expireTime, {from: player, value: miniRelayFee.add(mirrorFee)});
+            assert.fail();
+        } catch (error) {
+            assert.ok(error.toString().includes("expireTime must be two minutes later and one day earlier"));
         }
 
         try {
@@ -1037,7 +1051,7 @@ contract('TokenHub', (accounts) => {
 
             let timestamp = Math.floor(Date.now() / 1000); // counted by second
             let expireTime = timestamp + 300; // expire at five minutes later
-            const tx1 = await tokenManager.mirror(xyzToken.address, expireTime, {from: player, value: miniRelayFee.add(mirrorFee)});
+            await tokenManager.mirror(xyzToken.address, expireTime, {from: player, value: miniRelayFee.add(mirrorFee)});
             assert.fail();
         } catch (error) {
             assert.ok(error.toString().includes("bep20 total supply is too large"));
@@ -1133,7 +1147,21 @@ contract('TokenHub', (accounts) => {
         let tokenManagerBalance = await web3.eth.getBalance(tokenManager.address);
         assert.equal(web3.utils.toBN(tokenManagerBalance).eq(mirrorFee), true, "wrong tokenManager balance");
 
-        const mirrorChannelSeq = await crossChain.channelReceiveSequenceMap(MIRROR_CHANNELID);
+        // mirror fail ack
+        let mirrorChannelSeq = await crossChain.channelReceiveSequenceMap(MIRROR_CHANNELID);
+        const mirrorFailAckPackageBytes = Buffer.from(web3.utils.hexToBytes(nestedEventValues.payload));
+        await crossChain.handlePackage(Buffer.concat([buildFailAckPackagePrefix(), mirrorFailAckPackageBytes.subarray(33, mirrorFailAckPackageBytes.length)]), proof, merkleHeight, mirrorChannelSeq, MIRROR_CHANNELID, {from: relayer});
+        tokenManagerBalance = await web3.eth.getBalance(tokenManager.address);
+        assert.equal(web3.utils.toBN(tokenManagerBalance).eq(web3.utils.toBN(0)), true, "wrong tokenManager balance");
+
+        // success mirror
+        timestamp = Math.floor(Date.now() / 1000); // counted by second
+        expireTime = timestamp + 300; // expire at five minutes later
+        tx = await tokenManager.mirror(xyzToken.address, expireTime, {from: player, value: miniRelayFee.add(mirrorFee)});
+        tokenManagerBalance = await web3.eth.getBalance(tokenManager.address);
+        assert.equal(web3.utils.toBN(tokenManagerBalance).eq(mirrorFee), true, "wrong tokenManager balance");
+
+        mirrorChannelSeq = await crossChain.channelReceiveSequenceMap(MIRROR_CHANNELID);
         const mirrorAckPackageBytes = buildMirrorAckPackage(player, xyzToken.address, 18, "XYZ-123", mirrorFee, 0);
         await crossChain.handlePackage(mirrorAckPackageBytes, proof, merkleHeight, mirrorChannelSeq, MIRROR_CHANNELID, {from: relayer});
 
@@ -1158,5 +1186,96 @@ contract('TokenHub', (accounts) => {
         assert.equal(web3.utils.toBN(decodedSyncSynPackage.syncFee).mul(web3.utils.toBN(1e10)).eq(syncFee), true, "Wrong mirrorFee in sync syn package");
         tokenManagerBalance = await web3.eth.getBalance(tokenManager.address);
         assert.equal(web3.utils.toBN(tokenManagerBalance).eq(syncFee), true, "wrong tokenManager balance");
+
+        // sync fail ack package
+        let syncChannelSeq = await crossChain.channelReceiveSequenceMap(SYNC_CHANNELID);
+        const syncFailAckPackageBytes = Buffer.from(web3.utils.hexToBytes(nestedEventValues.payload));
+        await crossChain.handlePackage(Buffer.concat([buildFailAckPackagePrefix(), syncFailAckPackageBytes.subarray(33, syncFailAckPackageBytes.length)]), proof, merkleHeight, syncChannelSeq, SYNC_CHANNELID, {from: relayer});
+        tokenManagerBalance = await web3.eth.getBalance(tokenManager.address);
+        assert.equal(web3.utils.toBN(tokenManagerBalance).eq(web3.utils.toBN(0)), true, "wrong tokenManager balance");
+
+        // success sync and sync ack
+        timestamp = Math.floor(Date.now() / 1000); // counted by second
+        expireTime = timestamp + 300; // expire at five minutes later
+        await tokenManager.sync(xyzToken.address, expireTime, {from: player, value: miniRelayFee.add(syncFee)});
+        tokenManagerBalance = await web3.eth.getBalance(tokenManager.address);
+        assert.equal(web3.utils.toBN(tokenManagerBalance).eq(syncFee), true, "wrong tokenManager balance");
+
+        syncChannelSeq = await crossChain.channelReceiveSequenceMap(SYNC_CHANNELID);
+        await crossChain.handlePackage(buildSyncAckPackage(player, xyzToken.address, syncFee, 0), proof, merkleHeight, syncChannelSeq, SYNC_CHANNELID, {from: relayer});
+        tokenManagerBalance = await web3.eth.getBalance(tokenManager.address);
+        assert.equal(web3.utils.toBN(tokenManagerBalance).eq(web3.utils.toBN(0)), true, "wrong tokenManager balance");
+    });
+    it('iterate sync failures', async () => {
+        const tokenManager = await TokenManager.deployed();
+        const tokenHub = await TokenHub.deployed();
+        const miniToken = await MiniToken.deployed();
+        const defToken = await DEFToken.deployed();
+        const xyzToken = await XYZToken.deployed();
+        const crossChain = await CrossChain.deployed();
+        const miniRelayFee = await tokenHub.getMiniRelayFee();
+        const mirrorFee = await tokenManager.mirrorFee();
+        const xyzTokenOwner = accounts[0];
+        const relayer = accounts[1];
+        const player = accounts[2];
+
+        const syncFee = await tokenManager.syncFee();
+
+        try {
+            let timestamp = Math.floor(Date.now() / 1000); // counted by second
+            let expireTime = timestamp + 300; // expire at five minutes later
+            await tokenManager.sync(defToken.address, expireTime, {
+                from: player,
+                value: miniRelayFee.add(syncFee)
+            });
+            assert.fail();
+        } catch (error) {
+            assert.ok(error.toString().includes("the bep20 token is not bound"));
+        }
+
+        try {
+            let timestamp = Math.floor(Date.now() / 1000); // counted by second
+            let expireTime = timestamp + 300; // expire at five minutes later
+            await tokenManager.sync(miniToken.address, expireTime, {
+                from: player,
+                value: miniRelayFee.add(syncFee)
+            });
+            assert.fail();
+        } catch (error) {
+            assert.ok(error.toString().includes("the bep20 token is not bound by mirror"));
+        }
+
+        try {
+            let timestamp = Math.floor(Date.now() / 1000); // counted by second
+            let expireTime = timestamp + 100; // expire at five minutes later
+            await tokenManager.sync(xyzToken.address, expireTime, {
+                from: player,
+                value: miniRelayFee.add(syncFee)
+            });
+            assert.fail();
+        } catch (error) {
+            assert.ok(error.toString().includes("expireTime must be two minutes later and one day earlier"));
+        }
+
+        try {
+            await xyzToken.setTotalSupply(web3.utils.toBN(1e18).mul(web3.utils.toBN(1e18)), {from: xyzTokenOwner});
+
+            let timestamp = Math.floor(Date.now() / 1000); // counted by second
+            let expireTime = timestamp + 300; // expire at five minutes later
+            await tokenManager.sync(xyzToken.address, expireTime, {from: player, value: miniRelayFee.add(mirrorFee)});
+            assert.fail();
+        } catch (error) {
+            assert.ok(error.toString().includes("bep20 total supply is too large"));
+        }
+
+        await xyzToken.setTotalSupply(web3.utils.toBN(1e18).mul(web3.utils.toBN(1e8)), {from: xyzTokenOwner});
+        const xyzTokenNewTotalSupply = await xyzToken.totalSupply();
+
+        timestamp = Math.floor(Date.now() / 1000); // counted by second
+        expireTime = timestamp + 300; // expire at five minutes later
+        tx = await tokenManager.sync(xyzToken.address, expireTime, {from: player, value: miniRelayFee.add(syncFee)});
+        nestedEventValues = (await truffleAssert.createTransactionResult(crossChain, tx.tx)).logs[0].args;
+        let decodedSyncSynPackage = decodeSyncSynPackage(nestedEventValues.payload);
+        assert.equal(web3.utils.toBN(decodedSyncSynPackage.bep20Supply).eq(xyzTokenNewTotalSupply), true, "Wrong total supply in sync syn package");
     });
 });
