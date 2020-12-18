@@ -390,14 +390,20 @@ contract TokenManager is System, IApplication, IParamSubscriber {
     } else {
       emit mirrorFailure(mirrorAckPackage.bep20Addr, "unknown reason");
     }
-    mirrorAckPackage.mirrorSender.call{gas: MAX_GAS_FOR_TRANSFER_BNB, value: mirrorAckPackage.mirrorFee}("");
+    (bool success, ) = mirrorAckPackage.mirrorSender.call{gas: MAX_GAS_FOR_TRANSFER_BNB, value: mirrorAckPackage.mirrorFee}("");
+    if (!success) {
+      address(uint160(SYSTEM_REWARD_ADDR)).transfer(mirrorAckPackage.mirrorFee);
+    }
   }
 
   function handleMirrorFailAckPackage(bytes memory msgBytes) internal {
     (MirrorSynPackage memory mirrorSynPackage, bool decodeSuccess) = decodeMirrorSynPackage(msgBytes);
     require(decodeSuccess, "unrecognized mirror syn package");
     mirrorPendingRecord[mirrorSynPackage.bep20Addr] = false;
-    mirrorSynPackage.mirrorSender.call{gas: MAX_GAS_FOR_TRANSFER_BNB, value: mirrorSynPackage.mirrorFee*TEN_DECIMALS}("");
+    (bool success, ) = mirrorSynPackage.mirrorSender.call{gas: MAX_GAS_FOR_TRANSFER_BNB, value: mirrorSynPackage.mirrorFee*TEN_DECIMALS}("");
+    if (!success) {
+      address(uint160(SYSTEM_REWARD_ADDR)).transfer(mirrorSynPackage.mirrorFee*TEN_DECIMALS);
+    }
   }
 
   function encodeSyncSynPackage(SyncSynPackage memory syncSynPackage) internal pure returns (bytes memory) {
@@ -485,13 +491,19 @@ contract TokenManager is System, IApplication, IParamSubscriber {
     } else {
       emit syncFailure(syncAckPackage.bep20Addr, "unknown reason");
     }
-    syncAckPackage.syncSender.call{gas: MAX_GAS_FOR_TRANSFER_BNB, value: syncAckPackage.syncFee}("");
+    (bool success, ) = syncAckPackage.syncSender.call{gas: MAX_GAS_FOR_TRANSFER_BNB, value: syncAckPackage.syncFee}("");
+    if (!success) {
+      address(uint160(SYSTEM_REWARD_ADDR)).transfer(syncAckPackage.syncFee);
+    }
   }
 
   function handleSyncFailAckPackage(bytes memory msgBytes) internal {
     (SyncSynPackage memory syncSynPackage, bool decodeSuccess) = decodeSyncSynPackage(msgBytes);
     require(decodeSuccess, "unrecognized sync syn package");
-    syncSynPackage.syncSender.call{gas: MAX_GAS_FOR_TRANSFER_BNB, value: syncSynPackage.syncFee*TEN_DECIMALS}("");
+    (bool success, ) = syncSynPackage.syncSender.call{gas: MAX_GAS_FOR_TRANSFER_BNB, value: syncSynPackage.syncFee*TEN_DECIMALS}("");
+    if (!success) {
+      address(uint160(SYSTEM_REWARD_ADDR)).transfer(syncSynPackage.syncFee*TEN_DECIMALS);
+    }
   }
 
   function updateParam(string calldata key, bytes calldata value) override external onlyGov{
